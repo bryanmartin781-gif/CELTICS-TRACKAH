@@ -1,0 +1,9 @@
+{
+  "name": "celtics-tracker",
+  "version": "1.0.0",
+  "description": "Daily Celtics game tracker",
+  "main": "celtics-tracker.js",
+  "dependencies": {
+    "nodemailer": "^6.9.7"
+  }
+}
