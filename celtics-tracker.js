@@ -44,6 +44,94 @@ async function sendEmail(subject, htmlContent) {
   }
 }
 
+// Fetch Celtics schedule - ALL games
+async function getCelticsGamesFromLeague() {
+  try {
+    console.log('Fetching all NBA games...');
+    
+    // Fetch league calendar to get all games
+    const url = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/';
+    const data = await fetchData(url);
+    const response = JSON.parse(data);
+
+    if (!response.events || response.events.length === 0) {
+      console.log('No events found in league data');
+      return { lastGame: null, nextGame: null };
+    }
+
+    const events = response.events;
+    console.log(`Found ${events.length} total events`);
+
+    const now = new Date();
+    let lastGame = null;
+    let nextGame = null;
+
+    for (let event of events) {
+      try {
+        const eventDate = new Date(event.date);
+        const competition = event.competitions[0];
+        
+        if (!competition || !competition.competitors) continue;
+
+        // Find Celtics in competitors
+        const celtics = competition.competitors.find(c => c.team && c.team.abbreviation === 'BOS');
+        const opponent = competition.competitors.find(c => c.team && c.team.abbreviation !== 'BOS');
+
+        if (!celtics || !opponent) continue;
+
+        const celticsScore = parseInt(celtics.score) || 0;
+        const opponentScore = parseInt(opponent.score) || 0;
+        const status = competition.status.type.name;
+        const isCompleted = status === 'STATUS_FINAL';
+        const isUpcoming = status === 'STATUS_SCHEDULED';
+
+        console.log(`Event: ${opponent.team.abbreviation} on ${eventDate.toDateString()} - Status: ${status}`);
+
+        if (isCompleted && !lastGame && eventDate < now) {
+          lastGame = {
+            date: eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+            opponent: opponent.team.name,
+            celticsPoints: celticsScore,
+            opponentPoints: opponentScore,
+            homeAway: celtics.homeAway === 'home' ? 'Home' : 'Away',
+            wl: celticsScore > opponentScore ? 'W' : 'L',
+            seriesInfo: event.shortName || 'Playoff Game',
+            gameId: event.id,
+          };
+          console.log(`✓ Last Game Found: Celtics ${celticsScore} - ${opponent.team.name} ${opponentScore}`);
+        } else if (isUpcoming && !nextGame && eventDate >= now) {
+          nextGame = {
+            date: eventDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+            time: eventDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            opponent: opponent.team.name,
+            homeAway: celtics.homeAway === 'home' ? 'Home' : 'Away',
+            seriesInfo: event.shortName || 'Playoff Game',
+            gameId: event.id,
+          };
+          console.log(`✓ Next Game Found: vs ${opponent.team.name} on ${nextGame.date}`);
+        }
+
+        if (lastGame && nextGame) break;
+      } catch (e) {
+        console.log('Error parsing event:', e.message);
+        continue;
+      }
+    }
+
+    // If still no games, try fallback
+    if (!lastGame && !nextGame) {
+      console.log('No Celtics games found in league data, using fallback');
+      return getFallbackData();
+    }
+
+    return { lastGame, nextGame };
+  } catch (error) {
+    console.error('Error fetching games:', error.message);
+    console.log('Using fallback data due to API error');
+    return getFallbackData();
+  }
+}
+
 // Fetch box score for a specific game
 async function getBoxScore(gameId) {
   try {
@@ -93,7 +181,7 @@ async function getBoxScore(gameId) {
       }
     }
 
-    console.log(`Box score: Celtics ${celticsStats.length} players, Opponent ${opponentStats.length} players`);
+    console.log(`✓ Box score: Celtics ${celticsStats.length} players, Opponent ${opponentStats.length} players`);
     return { celtics: celticsStats, opponent: opponentStats };
   } catch (error) {
     console.error('Error fetching box score:', error.message);
@@ -101,87 +189,7 @@ async function getBoxScore(gameId) {
   }
 }
 
-// Fetch Celtics games from ESPN scoreboard
-async function getCelticsGames() {
-  try {
-    console.log('Fetching Celtics schedule from ESPN scoreboard...');
-    
-    // ESPN scoreboard API for NBA
-    const url = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard';
-    const data = await fetchData(url);
-    const response = JSON.parse(data);
-
-    console.log('ESPN scoreboard response received');
-
-    if (!response.events || response.events.length === 0) {
-      console.log('No events in scoreboard, using fallback data');
-      return getFallbackData();
-    }
-
-    const events = response.events;
-    console.log(`Found ${events.length} events`);
-
-    const now = new Date();
-    let lastGame = null;
-    let nextGame = null;
-
-    for (let event of events) {
-      const eventDate = new Date(event.date);
-      const competition = event.competitions[0];
-      
-      // Find Celtics in competitors
-      const celtics = competition.competitors.find(c => c.team.abbreviation === 'BOS');
-      const opponent = competition.competitors.find(c => c.team.abbreviation !== 'BOS');
-
-      if (!celtics || !opponent) continue;
-
-      const celticsScore = parseInt(celtics.score) || 0;
-      const opponentScore = parseInt(opponent.score) || 0;
-      const status = competition.status.type.name;
-      const isCompleted = status === 'STATUS_FINAL';
-      const isUpcoming = status === 'STATUS_SCHEDULED';
-
-      if (isCompleted && !lastGame && eventDate < now) {
-        lastGame = {
-          date: eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-          opponent: opponent.team.name,
-          celticsPoints: celticsScore,
-          opponentPoints: opponentScore,
-          homeAway: celtics.homeAway === 'home' ? 'Home' : 'Away',
-          wl: celticsScore > opponentScore ? 'W' : 'L',
-          seriesInfo: event.shortName || 'Playoff Game',
-          gameId: event.id,
-        };
-        console.log(`Last Game Found: Celtics ${celticsScore} - ${opponent.team.name} ${opponentScore}`);
-      } else if (isUpcoming && !nextGame && eventDate >= now) {
-        nextGame = {
-          date: eventDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
-          time: eventDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-          opponent: opponent.team.name,
-          homeAway: celtics.homeAway === 'home' ? 'Home' : 'Away',
-          seriesInfo: event.shortName || 'Playoff Game',
-        };
-        console.log(`Next Game Found: vs ${opponent.team.name} on ${nextGame.date}`);
-      }
-
-      if (lastGame && nextGame) break;
-    }
-
-    // If no games found in scoreboard, use fallback
-    if (!lastGame && !nextGame) {
-      console.log('No Celtics games in current scoreboard, using fallback data');
-      return getFallbackData();
-    }
-
-    return { lastGame, nextGame };
-  } catch (error) {
-    console.error('Error fetching games:', error.message);
-    console.log('Using fallback data due to API error');
-    return getFallbackData();
-  }
-}
-
-// Fallback data for when API fails or no games found
+// Fallback data for when API fails
 function getFallbackData() {
   console.log('Loading fallback game data...');
   
@@ -189,11 +197,11 @@ function getFallbackData() {
     lastGame: {
       date: 'Apr 19, 2026',
       opponent: '76ers',
-      celticsPoints: 108,
-      opponentPoints: 104,
+      celticsPoints: 123,
+      opponentPoints: 91,
       homeAway: 'Home',
       wl: 'W',
-      seriesInfo: 'Playoffs - Game 1',
+      seriesInfo: 'Playoffs - Round 1, Game 1',
       gameId: null,
     },
     nextGame: {
@@ -201,7 +209,8 @@ function getFallbackData() {
       time: '07:30 PM',
       opponent: '76ers',
       homeAway: 'Away',
-      seriesInfo: 'Playoffs - Game 2',
+      seriesInfo: 'Playoffs - Round 1, Game 2',
+      gameId: null,
     },
   };
 }
@@ -297,7 +306,7 @@ async function main() {
   console.log('GMAIL_PASSWORD:', GMAIL_PASSWORD ? 'SET' : 'NOT SET');
   
   try {
-    const { lastGame, nextGame } = await getCelticsGames();
+    const { lastGame, nextGame } = await getCelticsGamesFromLeague();
     
     console.log('Last Game:', lastGame ? 'FOUND' : 'NOT FOUND');
     console.log('Next Game:', nextGame ? 'FOUND' : 'NOT FOUND');
