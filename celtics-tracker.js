@@ -6,7 +6,7 @@ const GMAIL_PASSWORD = process.env.GMAIL_PASSWORD;
 const RECIPIENT_EMAIL = 'bmartin@aypa.com';
 
 // Fetch with timeout
-function fetchData(url, timeout = 8000) {
+function fetchData(url, timeout = 10000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timeout')), timeout);
     
@@ -38,68 +38,71 @@ async function sendEmail(subject, htmlContent) {
       subject: subject,
       html: htmlContent,
     });
-    console.log('✓ Email sent');
+    console.log('✓ Email sent to:', RECIPIENT_EMAIL);
   } catch (error) {
     console.error('✗ Email failed:', error.message);
   }
 }
 
-// Fetch Celtics games - using NBA API
+// Fetch Celtics games from ESPN API
 async function getCelticsGames() {
   try {
-    console.log('Fetching from NBA API...');
+    console.log('Fetching Celtics schedule from ESPN...');
     
-    // Get current season/playoff schedule
-    const url = 'https://data.nba.net/prod/v1/2024/schedule.json';
+    // ESPN API endpoint for Celtics
+    const url = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/25';
     const data = await fetchData(url);
-    const schedule = JSON.parse(data);
+    const response = JSON.parse(data);
 
-    if (!schedule.games) {
-      console.log('No games in schedule');
+    console.log('ESPN API response received');
+
+    if (!response.team || !response.team.events) {
+      console.log('No events in response');
       return { lastGame: null, nextGame: null };
     }
 
-    const games = schedule.games.filter(g => 
-      (g.homeTeam.teamId === '1610612738' || g.awayTeam.teamId === '1610612738') &&
-      g.gameType >= 4 // 4 = playoff, 5 = finals
-    );
-
-    console.log(`Found ${games.length} Celtics playoff games`);
-
-    if (games.length === 0) {
-      return { lastGame: null, nextGame: null };
-    }
+    const events = response.team.events;
+    console.log(`Found ${events.length} events`);
 
     const now = new Date();
     let lastGame = null;
     let nextGame = null;
 
-    for (let game of games) {
-      const gameTime = new Date(game.gameEt);
-      const isCeltics = game.homeTeam.teamId === '1610612738';
-      const opponent = isCeltics ? game.awayTeam : game.homeTeam;
+    for (let event of events) {
+      const eventDate = new Date(event.date);
+      const competition = event.competitions[0];
+      
+      // Determine which team is Celtics
+      const celtics = competition.competitors.find(c => c.id === '25');
+      const opponent = competition.competitors.find(c => c.id !== '25');
 
-      if (gameTime < now && !lastGame && game.gameStatus >= 3) {
-        // Game completed
-        const celticsTeam = isCeltics ? game.homeTeam : game.awayTeam;
+      if (!celtics || !opponent) continue;
+
+      const celticsScore = parseInt(celtics.score) || 0;
+      const opponentScore = parseInt(opponent.score) || 0;
+      const isCompleted = eventDate < now && competition.status.type.name === 'STATUS_FINAL';
+      const isUpcoming = eventDate >= now && (competition.status.type.name === 'STATUS_SCHEDULED' || competition.status.type.name === 'STATUS_INPROGRESS');
+
+      if (isCompleted && !lastGame) {
         lastGame = {
-          date: gameTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-          opponent: opponent.teamName,
-          celticsPoints: isCeltics ? game.homeTeam.score : game.awayTeam.score,
-          opponentPoints: isCeltics ? game.awayTeam.score : game.homeTeam.score,
-          homeAway: isCeltics ? 'Home' : 'Away',
-          wl: (isCeltics ? game.homeTeam.score : game.awayTeam.score) > (isCeltics ? game.awayTeam.score : game.homeTeam.score) ? 'W' : 'L',
-          seriesInfo: game.seriesText || 'Playoff Game',
+          date: eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          opponent: opponent.team.name,
+          celticsPoints: celticsScore,
+          opponentPoints: opponentScore,
+          homeAway: celtics.homeAway === 'home' ? 'Home' : 'Away',
+          wl: celticsScore > opponentScore ? 'W' : 'L',
+          seriesInfo: competition.notes && competition.notes.length > 0 ? competition.notes[0].headline : 'Playoff Game',
         };
-      } else if (gameTime >= now && !nextGame) {
-        // Upcoming game
+        console.log(`Last Game Found: Celtics ${celticsScore} - ${opponent.team.name} ${opponentScore}`);
+      } else if (isUpcoming && !nextGame) {
         nextGame = {
-          date: gameTime.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
-          time: gameTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-          opponent: opponent.teamName,
-          homeAway: isCeltics ? 'Home' : 'Away',
-          seriesInfo: game.seriesText || 'Playoff Game',
+          date: eventDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+          time: eventDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+          opponent: opponent.team.name,
+          homeAway: celtics.homeAway === 'home' ? 'Home' : 'Away',
+          seriesInfo: competition.notes && competition.notes.length > 0 ? competition.notes[0].headline : 'Playoff Game',
         };
+        console.log(`Next Game Found: vs ${opponent.team.name} on ${nextGame.date}`);
       }
 
       if (lastGame && nextGame) break;
@@ -109,28 +112,6 @@ async function getCelticsGames() {
   } catch (error) {
     console.error('Error fetching games:', error.message);
     return { lastGame: null, nextGame: null };
-  }
-}
-
-// Fetch injury news from ESPN
-async function getInjuryNews() {
-  try {
-    console.log('Fetching injury news...');
-    const url = 'https://www.espn.com/nba/injuries';
-    const html = await fetchData(url, 5000);
-    
-    // Look for Celtics and 76ers injury mentions
-    const celticMatches = html.match(/Celtics[\s\S]{0,200}(Out|Day-to-Day|Questionable)/gi) || [];
-    const sixersMatches = html.match(/76ers[\s\S]{0,200}(Out|Day-to-Day|Questionable)/gi) || [];
-    
-    const injuries = [];
-    celticMatches.slice(0, 2).forEach(m => injuries.push('Celtics: ' + m.substring(0, 80)));
-    sixersMatches.slice(0, 2).forEach(m => injuries.push('76ers: ' + m.substring(0, 80)));
-    
-    return injuries.slice(0, 3);
-  } catch (error) {
-    console.error('Error fetching injuries:', error.message);
-    return [];
   }
 }
 
@@ -179,17 +160,6 @@ async function buildEmailHTML(lastGame, nextGame) {
     `;
   } else {
     html += `<p style="color: #999;">No upcoming games scheduled.</p>`;
-  }
-
-  // Injury News (only if available)
-  const injuries = await getInjuryNews();
-  if (injuries.length > 0) {
-    html += `
-      <div style="border-left: 5px solid #ff6b35; padding: 15px; margin-bottom: 20px; background: #fff5f0; border-radius: 4px;">
-        <h3 style="color: #ff6b35; margin: 0 0 12px 0;">🚑 Injury Updates</h3>
-        ${injuries.map(inj => `<p style="margin: 4px 0; font-size: 13px; color: #333;">${inj}</p>`).join('')}
-      </div>
-    `;
   }
 
   html += `
