@@ -44,6 +44,63 @@ async function sendEmail(subject, htmlContent) {
   }
 }
 
+// Fetch box score for a specific game
+async function getBoxScore(gameId) {
+  try {
+    if (!gameId) {
+      console.log('No game ID provided for box score');
+      return { celtics: [], opponent: [] };
+    }
+    console.log('Fetching box score for game:', gameId);
+    const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${gameId}`;
+    const data = await fetchData(url, 5000);
+    const response = JSON.parse(data);
+
+    if (!response.boxscore || !response.boxscore.teams) {
+      console.log('No boxscore data available');
+      return { celtics: [], opponent: [] };
+    }
+
+    const teams = response.boxscore.teams;
+    let celticsStats = [];
+    let opponentStats = [];
+
+    // Extract player stats
+    for (let team of teams) {
+      const players = team.players || [];
+      const topPlayers = players
+        .filter(p => p.stats && p.stats.length > 0)
+        .sort((a, b) => {
+          const aPoints = a.stats[0].stats ? (a.stats[0].stats.points || 0) : 0;
+          const bPoints = b.stats[0].stats ? (b.stats[0].stats.points || 0) : 0;
+          return bPoints - aPoints;
+        })
+        .slice(0, 5)
+        .map(p => {
+          const stat = p.stats[0].stats || {};
+          return {
+            name: p.displayName,
+            points: stat.points || 0,
+            rebounds: stat.reboundsTotal || 0,
+            assists: stat.assists || 0,
+          };
+        });
+
+      if (team.team.abbreviation === 'BOS') {
+        celticsStats = topPlayers;
+      } else {
+        opponentStats = topPlayers;
+      }
+    }
+
+    console.log(`Box score: Celtics ${celticsStats.length} players, Opponent ${opponentStats.length} players`);
+    return { celtics: celticsStats, opponent: opponentStats };
+  } catch (error) {
+    console.error('Error fetching box score:', error.message);
+    return { celtics: [], opponent: [] };
+  }
+}
+
 // Fetch Celtics games from ESPN scoreboard
 async function getCelticsGames() {
   try {
@@ -93,6 +150,7 @@ async function getCelticsGames() {
           homeAway: celtics.homeAway === 'home' ? 'Home' : 'Away',
           wl: celticsScore > opponentScore ? 'W' : 'L',
           seriesInfo: event.shortName || 'Playoff Game',
+          gameId: event.id,
         };
         console.log(`Last Game Found: Celtics ${celticsScore} - ${opponent.team.name} ${opponentScore}`);
       } else if (isUpcoming && !nextGame && eventDate >= now) {
@@ -127,7 +185,6 @@ async function getCelticsGames() {
 function getFallbackData() {
   console.log('Loading fallback game data...');
   
-  // Hardcode the most recent Celtics vs 76ers games (playoffs)
   return {
     lastGame: {
       date: 'Apr 19, 2026',
@@ -137,6 +194,7 @@ function getFallbackData() {
       homeAway: 'Home',
       wl: 'W',
       seriesInfo: 'Playoffs - Game 1',
+      gameId: null,
     },
     nextGame: {
       date: 'Mon, Apr 21',
@@ -148,7 +206,7 @@ function getFallbackData() {
   };
 }
 
-// Build email
+// Build email with box scores
 async function buildEmailHTML(lastGame, nextGame) {
   let html = `
     <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 650px;">
@@ -156,13 +214,16 @@ async function buildEmailHTML(lastGame, nextGame) {
       <p style="color: #666; font-size: 12px; margin: 0 0 20px 0;">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
   `;
 
-  // Last Game
+  // Last Game with Box Score
   if (lastGame) {
+    const { celtics, opponent } = await getBoxScore(lastGame.gameId);
+
     html += `
       <div style="border-left: 5px solid #007935; padding: 15px; margin-bottom: 20px; background: #f9f9f9; border-radius: 4px;">
         <h3 style="color: #007935; margin: 0 0 12px 0; font-size: 18px;">📊 Most Recent Game</h3>
         <p style="margin: 4px 0; color: #666;"><strong>Date:</strong> ${lastGame.date}</p>
         <p style="margin: 4px 0; color: #666;"><strong>Series:</strong> ${lastGame.seriesInfo}</p>
+        
         <div style="margin: 12px 0; padding: 12px; background: white; border-radius: 4px; border: 1px solid #ddd;">
           <p style="margin: 0; font-size: 24px; font-weight: bold; color: ${lastGame.wl === 'W' ? '#007935' : '#d32f2f'};">
             Celtics <span style="color: #000;">${lastGame.celticsPoints}</span> 
@@ -173,7 +234,31 @@ async function buildEmailHTML(lastGame, nextGame) {
             ${lastGame.wl === 'W' ? '✓ CELTICS WIN' : '✗ LOSS'}
           </p>
         </div>
+        
         <p style="margin: 4px 0; color: #666;"><strong>Location:</strong> ${lastGame.homeAway}</p>
+        
+        <!-- Box Scores -->
+        ${celtics.length > 0 ? `
+          <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">
+            <p style="margin: 0 0 8px 0; font-weight: bold; color: #007935; font-size: 13px;">🏀 CELTICS TOP SCORERS</p>
+            ${celtics.map(p => `
+              <p style="margin: 3px 0; font-size: 12px; color: #333;">
+                <strong>${p.name}</strong> ${p.points} PTS, ${p.rebounds} REB, ${p.assists} AST
+              </p>
+            `).join('')}
+          </div>
+        ` : ''}
+        
+        ${opponent.length > 0 ? `
+          <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
+            <p style="margin: 0 0 8px 0; font-weight: bold; color: #d32f2f; font-size: 13px;">🏀 ${lastGame.opponent.toUpperCase()} TOP SCORERS</p>
+            ${opponent.map(p => `
+              <p style="margin: 3px 0; font-size: 12px; color: #333;">
+                <strong>${p.name}</strong> ${p.points} PTS, ${p.rebounds} REB, ${p.assists} AST
+              </p>
+            `).join('')}
+          </div>
+        ` : ''}
       </div>
     `;
   } else {
