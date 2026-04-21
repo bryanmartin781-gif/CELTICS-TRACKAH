@@ -205,19 +205,39 @@ async function buildEmailHTML(lastGame, nextGame) {
 // Main
 async function main() {
   console.log('🏀 Starting Celtics Tracker...');
+  console.log('GMAIL_USER:', GMAIL_USER ? 'SET' : 'NOT SET');
+  console.log('GMAIL_PASSWORD:', GMAIL_PASSWORD ? 'SET' : 'NOT SET');
+  
   try {
     const { lastGame, nextGame } = await getCelticsGames();
     
+    console.log('Last Game:', lastGame ? 'FOUND' : 'NOT FOUND');
+    console.log('Next Game:', nextGame ? 'FOUND' : 'NOT FOUND');
+    
+    if (lastGame) {
+      console.log('  - Opponent:', lastGame.opponent);
+      console.log('  - Score:', lastGame.celticsPoints, '-', lastGame.opponentPoints);
+      console.log('  - Result:', lastGame.wl);
+    }
+    
+    if (nextGame) {
+      console.log('  - Opponent:', nextGame.opponent);
+      console.log('  - Date:', nextGame.date);
+    }
+    
     if (!lastGame && !nextGame) {
-      console.log('No games found');
+      console.log('⚠ No games found - exiting');
       return;
     }
 
+    console.log('Building email...');
     const html = await buildEmailHTML(lastGame, nextGame);
+    console.log('Sending email to:', RECIPIENT_EMAIL);
     await sendEmail('🏀 Boston Celtics Daily Update', html);
     console.log('✓ Complete');
   } catch (error) {
     console.error('Fatal error:', error.message);
+    console.error('Stack:', error.stack);
   }
 }
 
